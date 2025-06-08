@@ -6,6 +6,7 @@ import time
 import ast # For safer eval() inputs.
 import ctypes
 import json
+import types
 MODULES = {}
 
 HEADER = '\033[95m'
@@ -24,7 +25,7 @@ UNDERLINE = '\033[4m'
 
 PROTECTED_NAMES = ["downloads", "documents", "pictures", "videos", "music", "contacts", "desktop", "appdata", "onedrive"]
 CURRENT_DIR = os.path.abspath(os.getcwd())
-SYSTEM_DIRS = [os.path.normcase(os.path.normpath(os.path.abspath(p))) for p in ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"]]
+SYSTEM_DIRS = [os.path.normcase(os.path.normpath(os.path.abspath(p))) for p in ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)",os.path.expanduser("~"), os.getenv("USERPROFILE")] if p]
 
 APPDATA = os.getenv('APPDATA')
 XCON_DATA_DIR = os.path.join(APPDATA, "XCon")
@@ -33,6 +34,7 @@ VARS_FILE = os.path.join(XCON_DATA_DIR, "vardecl.json")
 
 LAST = None
 DECLARELIST: dict = {}
+DECLARELIST = {k: v for k, v in DECLARELIST.items() if not isinstance(v, types.ModuleType)}
 PACKAGELIST: list = []
 
 def __save_vars():
@@ -168,7 +170,7 @@ def __is_sensitive(path, msg=True) -> bool:
     return False
 
 def __sanitize_context(context):
-    SAFE_TYPES = (int, float, str, bool, list, dict, tuple, set)
+    SAFE_TYPES = (int, float, str, bool, list, dict, tuple, set, types.ModuleType)
     sanitized = {}
     for k, v in context.items():
         if isinstance(v, SAFE_TYPES):
@@ -178,7 +180,7 @@ def __sanitize_context(context):
 def __safe_eval(expr, context=None):
     if context is None:
         context = {}
-    context = __sanitize_context(context)
+    context = __sanitize_context(context)  # Filter out functions/modules
     GLOBALS = {
         "__builtins__": {
             "True": True,
@@ -206,6 +208,7 @@ def __safe_eval(expr, context=None):
         return eval(expr, GLOBALS, context)
     except Exception as e:
         raise RuntimeError(f"{WARNING}Evaluation failed for expression {OKCYAN}{expr!r}{ENDC}. Reason:\n\n{ENDC}{e}")
+        return
 
 PROMPT = ""
 RESERVED = {
@@ -214,7 +217,7 @@ RESERVED = {
     "access module", "module", "install", "uninstall",
     "process", "mute volume", "set volume",
     "fmake", "dirmake", "fdel", "fcopy", "dirdel", "dircopy",
-    "varmake", "vardel", "see",  
+    "varmake", "vardel", "see", "save vars", "load vars",  
     "xcon script", "python script", "run python", "python block", "path help", "inspect help", 
     "check",
     "modules help", "internal help", "io help", "script help", "variable help", "condition help", 
@@ -275,7 +278,8 @@ def __handle_prompt(prompt: str):
             return
         try:
             MODULES[MODULE] = __import__(MODULE)
-            globals()[MODULE] = __import__(MODULE)
+            globals()[MODULE] = MODULES[MODULE]
+            PYTHON_CONTEXT[MODULE] = MODULES[MODULE]
             print(f"{OKGREEN}Module {MODULE} accessed successfully.{ENDC}")
             return
         except (ImportError, ModuleNotFoundError) as e:
@@ -283,8 +287,13 @@ def __handle_prompt(prompt: str):
             return
     if prompt.startswith("module "):
         MODULE = prompt.removeprefix("module ")
-        print(type(__safe_eval(MODULE, PYTHON_CONTEXT)))
-        return
+        mod = __safe_eval(MODULE, PYTHON_CONTEXT)
+        try:
+            print(f"{OKCYAN}The type of module {MODULE} is: {type(__safe_eval(MODULE, PYTHON_CONTEXT))}.\n(Origin is {mod.__file__}.)")
+            return
+        except Exception as e:
+            print(f"{FAIL}Checking the type of the module {MODULE} failed (did you access it first? Does the module exist?). Reason:\n\n{ENDC}{e}")
+            return
     if prompt.startswith("install "):
         PACKAGE = prompt.removeprefix("install ")
         if PACKAGE == "":
@@ -452,6 +461,10 @@ def __handle_prompt(prompt: str):
                 else:
                     print(f"{OKCYAN}The amount of times {TEXT} has been counted {count} times in the file {FILE}.{ENDC}")
                 return
+            if not os.path.exists(PATH):
+                print(f"{WARNING}File {FILE} does not exist in the current context.{ENDC}")
+                return
+        PATH = os.path.join(os.getcwd(), FILE)
         if not os.path.exists(PATH):
             print(f"{WARNING}File {FILE} does not exist in the current context.{ENDC}")
             return
@@ -470,14 +483,14 @@ def __handle_prompt(prompt: str):
             return
         CONTEXT = dict(globals())
         CONTEXT.update(DECLARELIST)
-        try:
-            if CONDITION.startswith("type "):
-                TYPECONDITION = __safe_eval(CONDITION.removeprefix("type "), CONTEXT)
-                print(type(TYPECONDITION))
+        if CONDITION.startswith("type "):
+            TYPECONDITION = __safe_eval(CONDITION.removeprefix("type "), CONTEXT)
+            try:    
+                print(f"{OKCYAN}{TYPECONDITION} has the type {type(TYPECONDITION).__name__}.")
                 return
-        except Exception as e:
-            print(f"{FAIL}Could not check condition {TYPECONDITION}. Reason:\n\n{ENDC}{e}")
-            return
+            except Exception as e:
+                print(f"{FAIL}Could not check condition {TYPECONDITION}. Reason:\n\n{ENDC}{e}")
+                return
         try:
             if CONDITION.endswith(" exists"):
                 OBJECT = CONDITION.removesuffix(" exists")
@@ -492,7 +505,7 @@ def __handle_prompt(prompt: str):
                     return
         except Exception as e:
             print(f"{FAIL}An exception has occurred while checking existence of {short.lower()} {OBJECT}. Reason:\n\n{ENDC}{e}")
-            return            
+            return   
         RESULT = __safe_eval(CONDITION, CONTEXT)
         if RESULT is True: 
             print(f"{OKGREEN}Condition \"{CONDITION}\" is true.{ENDC}")
@@ -724,7 +737,7 @@ def __handle_prompt(prompt: str):
                 print(f"{WARNING}File {FILE} does not exist or is not accessible.{ENDC}")
                 return
             if __is_protected(FILE):
-                print(f"{FAIL}Tried to delete a file in a sensitive directory. Exiting XCon console for optimal safety.{ENDC}")
+                print(f"{FAIL}Tried to delete a file in a sensitive directory, as {OKCYAN}{FILE} {FAIL}in {OKCYAN}{PATH} {FAIL}is a Windows and/or critical program file. Exiting XCon console for optimal safety.{ENDC}")
                 time.sleep(2.0)
                 sys.exit(-1)
             else:
@@ -812,24 +825,23 @@ def __handle_prompt(prompt: str):
         try:
             if DIR == "current":
                 TARGET_PATH = os.getcwd()
-                LAST = os.path.basename(TARGET_PATH)
+                last_dirname = os.path.basename(TARGET_PATH)
                 if __is_sensitive(TARGET_PATH, True):
-                    print(f"{FAIL}ACCESS DENIED: Tried to remove sensitive or protected directory.\nExiting XCon Console for optimal safety.{ENDC}")
+                    print(f"{FAIL}ACCESS DENIED: Tried to remove sensitive or protected directory, as the sensitive directory {OKCYAN}{TARGET_PATH} {FAIL}was targeted for deletion.\nExiting XCon Console for optimal safety.{ENDC}")
                     time.sleep(1.5)
                     sys.exit(-1)
                 if TARGET_PATH == os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__):
                     print(f"{FAIL}ACCESS DENIED: Tried to self destruct distribution folder where program is running.\nExiting XCon Console for optimal safety.{ENDC}")
                     time.sleep(1.5)
                     sys.exit(-1)
-                CONFIRM = input(f"{OKCYAN}Are you sure you want to remove the current directory {LAST}? {OKGREEN}[y]{COMMENT}/{FAIL}[n]{ENDC} ").strip()
+                CONFIRM = input(f"{OKCYAN}Are you sure you want to remove the current directory {last_dirname}? {OKGREEN}[y]{COMMENT}/{FAIL}[n]{ENDC} ").strip()
                 if CONFIRM.lower() == "y":
                     print(f"{WARNING}Removing current directory {TARGET_PATH}...{ENDC}")
-                    os.chdir(os.path.dirname(TARGET_PATH))
                     shutil.rmtree(TARGET_PATH)
-                    print(f"{OKGREEN}Directory {LAST} removed successfully.{ENDC}")
+                    print(f"{OKGREEN}Directory {last_dirname} removed successfully.{ENDC}")
                     return
                 elif CONFIRM.lower() == "n":
-                    print(f"{OKCYAN}Deletion of directory {LAST} stopped.{ENDC}")
+                    print(f"{OKCYAN}Deletion of directory {last_dirname} stopped.{ENDC}")
                     return
                 else:
                     print(f"{WARNING}{CONFIRM} is not a valid answer, defaulting to deletion stop.{ENDC}")
@@ -840,7 +852,7 @@ def __handle_prompt(prompt: str):
                     print(f"{WARNING}Directory {DIR} does not exist. Please try again.{ENDC}")
                     return
                 if __is_sensitive(TARGET_PATH, True):
-                    print(f"{FAIL}ACCESS DENIED: Tried to remove sensitive or protected directory.\nExiting XCon Console for optimal safety.{ENDC}")
+                    print(f"{FAIL}ACCESS DENIED: Tried to remove sensitive or protected directory, as the sensitive directory {OKCYAN}{TARGET_PATH} {FAIL}was targeted for deletion.\nExiting XCon Console for optimal safety.{ENDC}")
                     time.sleep(1.5)
                     sys.exit(-1)
                 CONFIRM = input(f"{OKCYAN}Are you sure you want to remove the directory {DIR}? {OKGREEN}[y]{COMMENT}/{FAIL}[n]{ENDC} ").strip()
@@ -899,7 +911,7 @@ def __handle_prompt(prompt: str):
                 return
             split_VARDECL = VARDECL.split("set", 1)
             if len(split_VARDECL) != 2:
-                print(f"{WARNING}Please put set in the right position: varmake x set 1, not varmake set x 1 or varmake x 1 set or varmake 1 x set.{ENDC}")
+                print(f"{WARNING}Please put the keyword {OKCYAN}set {WARNING}in the right position: {OKBLUE}varmake {OKCYAN}x {YELLOW}set {OKCYAN}1{WARNING}, not {OKBLUE}varmake {YELLOW}set {OKCYAN}x {YELLOW}1 or {OKBLUE}varmake {OKCYAN}x {YELLOW}1 {OKBLUE}set or {OKBLUE}varmake {OKCYAN}1 {YELLOW}x {OKCYAN}set {WARNING}(or any other way).{ENDC}")
                 return
             VARVAL_RAW = split_VARDECL[1].strip()
             VARNAME = split_VARDECL[0].strip()
@@ -908,11 +920,17 @@ def __handle_prompt(prompt: str):
             except Exception:
                 try:
                     VARVAL = __safe_eval(VARVAL_RAW, PYTHON_CONTEXT)
-                except Exception:
+                except Exception as e:
                     if VARVAL_RAW in DECLARELIST:
                         VARVAL = DECLARELIST[VARVAL_RAW]
                     else:
-                        VARVAL = VARVAL_RAW
+                        print(f"{FAIL}Failed to initialize variable {OKCYAN}{VARNAME}{FAIL}, because it contains a invalid value: {OKCYAN}{VARVAL_RAW}{FAIL}. Error:\n\n{ENDC}{e}")
+                        result = input(f"{WARNING}Would you like to convert it to a string instead?").strip()
+                        if result == "y":
+                            VARVAL = VARVAL_RAW
+                        elif result == "n":
+                            print(f"{WARNING}Variable {OKCYAN}{VARNAME} {WARNING}has not been announced has declared.{ENDC}")
+                            return
             if VARNAME in globals():
                 print(f"{WARNING}Variable {VARNAME} already exists. Overwriting {VARNAME} with value {VARVAL}.{ENDC}")
             if VARNAME in RESERVED:
@@ -955,7 +973,6 @@ def __handle_prompt(prompt: str):
             target = f'variable {VAR}' if VAR != "all" else "all variables"
             print(f"{FAIL}Something went wrong while removing {target}. Reason:\n\n{ENDC}{e}")
             return
-        
     if prompt == "save vars":
         VARS = ', '.join(f"{OKCYAN}{varname} {OKGREEN}({varval!r})" for varname, varval in DECLARELIST.items())
         print(f"{WARNING}Attempting to force save variables {VARS}...")
@@ -1042,31 +1059,83 @@ def __handle_prompt(prompt: str):
                   """)
         case "what is reality":
             print(fr"""
-                  {OKCYAN}-- Sing along!
-                  {PINK}Every day, I imagine a future where I can be with you
-                  In my hand is a pen that will write a poem of me and you
-                  The ink flows down into a dark puddle
-                  Just move your hand, write the way into his heart
-                  But in this world of infinite choices
-                  What will it take just to find that special day?
-                  What will it take just to find that special day?
-                  Have I found everybody a fun assignment to do today?
-                  When you're here, everything that we do is fun for them anyway
-                  When I can't even read my own feelings
-                  What good are words when a smile says it all?
-                  And if this world won't write me an ending
-                  What will it take just for me to have it all?
-                  Does my pen only write bitter words for those who are dear to me?
-                  Is it love if I take you, or is it love if I set you free?
-                  The ink flows down into a dark puddle
-                  How can I write love into reality?
-                  If I can't hear the sound of your heartbeat
-                  What do you call love in your reality?
-                  And in your reality, if I don't know how to love you
-                  I'll leave you be{ENDC}
-                  
-                  """)
-            subprocess.run("start https://www.youtube.com/watch?v=CAL4WMpBNs0", shell=True)
+                  {WARNING}The lyrics are on-beat depending on how fast the link opens for you, so please be cautious! :(""")
+            print(fr"""
+                  {OKCYAN}-- Sing along!""")
+            link = subprocess.run("start https://www.youtube.com/watch?v=CAL4WMpBNs0", shell=True)
+            result = input("Press any key to start the lyrics when the song starts!\nIf you want to exit, type 'exit'.")
+            if result == "exit":
+                return
+            if link.returncode == 0:
+                for i in range(10, 0, -1):
+                    print(f"Lyrics start in {i}...", end="\r", flush=True)
+                    time.sleep(1.0)
+                print(" " * 30, end='\r')
+                print(fr"""
+                      {PINK}Every day, I imagine a future where I can be with you""")
+                time.sleep(8.0)
+                print(fr"""
+                      In my hand is a pen that will write a poem of me and you""")
+                time.sleep(9.25)
+                print(fr"""
+                      The ink flows down into a dark puddle""")
+                time.sleep(4.75)
+                print(fr"""
+                      Just move your hand, write the way into his heart""")
+                time.sleep(5.25)
+                print(fr"""
+                      But in this world of infinite choices""")
+                time.sleep(4.25)
+                print(fr"""
+                      What will it take just to find that special day?""")
+                time.sleep(4.25)
+                print(fr"""
+                      What will it take just to find that special day?""")
+                time.sleep(13.75)
+                print(fr"""
+                      Have I found everybody a fun assignment to do today?""")
+                time.sleep(9.25)
+                print(fr"""
+                      When you're here, everything that we do is fun for them anyway""")
+                time.sleep(9.5)
+                print(fr"""
+                      When I can't even read my own feelings""")
+                time.sleep(4.25)
+                print(fr"""
+                      What good are words when a smile says it all?""")
+                time.sleep(4.25)
+                print(fr"""
+                      And if this world won't write me an ending""")
+                time.sleep(5.0)
+                print(fr"""
+                      What will it take just for me to have it all?""")
+                time.sleep(23.25)
+                print(fr"""
+                      Does my pen only write bitter words for those who are dear to me?""")
+                time.sleep(10.0)
+                print(fr"""
+                      Is it love if I take you, or is it love if I set you free?""")
+                time.sleep(12.75)
+                print(fr"""
+                      The ink flows down into a dark puddle""")
+                time.sleep(4.75)
+                print(fr"""
+                      How can I write love into reality?""")
+                time.sleep(5.25)
+                print(fr"""
+                      If I can't hear the sound of your heartbeat""")
+                time.sleep(5.25)
+                print(fr"""
+                      What do you call love in your reality?""")
+                time.sleep(4.25)
+                print(fr"""
+                      And in your reality, if I don't know how to love you""")
+                time.sleep(12.25)
+                print(fr"""
+                      I'll leave you be{ENDC} 
+                """)
+            else:
+                print(f"{FAIL}Monika did not want to sing for you... :({ENDC}")
         case "path help":
             print(fr"""
                 -- Path
