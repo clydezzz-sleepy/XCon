@@ -608,53 +608,44 @@ def __handle_prompt(prompt: str):
         print(f"{OKCYAN}Please use {OKBLUE}close {ENDC}instead.")
         return
     if prompt.startswith("process "):
-        if prompt.strip() == "process":
+        if prompt == "process shutdown":
             print(f"{WARNING}The process command may be empty or incomplete. Try again.\n{ENDC}")
             return
         if "shutdown" in prompt:
+            cmd = ["shutdown"]
             if "!r" in prompt:
-                if "!f" in prompt:
-                    subprocess.run("shutdown /r /f", shell=True)
-                elif "!fw" in prompt:
-                    subprocess.run("shutdown /r /fw", shell=True)
-                elif "!o" in prompt:
-                    subprocess.run("shutdown /r /o", shell=True)
-                elif "!i" in prompt:
-                    subprocess.run("shutdown /r /i", shell=True)
-                elif "!sf" in prompt:
-                    subprocess.run("shutdown /r /soft", shell=True)
-                elif "!e" in prompt:
-                    subprocess.run("shutdown /r /e", shell=True)
-                else:
-                    subprocess.run("shutdown /r", shell=True)
-                return
+                cmd.append("/r")
             elif "!s" in prompt:
-                if "!f" in prompt:
-                    subprocess.run("shutdown /s /f", shell=True)
-                elif "!fw" in prompt:
-                    subprocess.run("shutdown /s /fw", shell=True)
-                elif "!o" in prompt:
-                    subprocess.run("shutdown /s /o", shell=True)
-                elif "!i" in prompt:
-                    subprocess.run("shutdown /s /i", shell=True)
-                elif "!sf" in prompt:
-                    subprocess.run("shutdown /s /soft", shell=True)
-                elif "!e" in prompt:
-                    subprocess.run("shutdown /s /e", shell=True)
-                else:
-                    subprocess.run("shutdown /s", shell=True)
-                return
+                cmd.append("/s")
             elif "!h" in prompt:
-                if "!f" in prompt:
-                    if "!l" in prompt: 
-                        subprocess.run("shutdown /h /f /l", shell=True)
-                    else:
-                        subprocess.run("shutdown /h /f", shell=True)
-                if "!l" in prompt:
-                    subprocess.run("shutdown /h /l")
-                else:
-                    subprocess.run("shutdown /h", shell=True)
-                return
+                cmd.append("/h")
+            if "!f" in prompt:
+                cmd.append("/f")
+            if "!fw" in prompt:
+                cmd.append("/fw")
+            if "!o" in prompt:
+                cmd.append("/o")
+            if "!i" in prompt:
+                cmd.append("/i")
+            if "!sf" in prompt:
+                cmd.append("/soft")
+            if "!e" in prompt:
+                cmd.append("/e")
+            if "!l" in prompt and "!h" in prompt:
+                cmd.append("/l")
+            if "!t" in prompt:
+                parts = prompt.split()
+                if "!t" in parts:
+                    t_index = parts.index("!t")
+                    if t_index + 1 < len(parts):
+                        seconds = parts[t_index + 1]
+                        cmd += ["/t", str(seconds)]
+            full_cmd = " ".join(cmd)
+            result = subprocess.run(full_cmd, shell=True, text=True, capture_output=True)
+            output = result.stdout.strip() + result.stderr.strip()
+            if output.startswith("Usage:"):
+                output = f"{YELLOW}This command didn't seem to work, please try again.{ENDC}"
+            print(output)
             return
         elif "sleep" in prompt:
             subprocess.run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0", shell=True)
@@ -1167,12 +1158,14 @@ def __handle_prompt(prompt: str):
                 {OKBLUE}process shutdown {ORANGE}!r{ENDC}           : Restart the computer.
                 Options: {ORANGE}[!f: close files] [!fw: firmware]
                          [!o: advanced boot options] [!i: show remote shutdown]
-                         [!sf: soft close programs] [!e: enable shutdown docs]{ENDC}
+                         [!sf: soft close programs] [!e: enable shutdown docs]
+                         [!t {OKCYAN}<seconds>{ORANGE}: restart in {OKCYAN}<seconds> {ORANGE}seconds]{ENDC}
 
                 {OKBLUE}process shutdown {ORANGE}!s{ENDC}           : Shut down the computer (same options as above).
                 Options: {ORANGE}[!f: close files] [!fw: firmware]
                          [!o: advanced boot options] [!i: show remote shutdown]
-                         [!sf: soft close programs] [!e: enable shutdown docs]{ENDC}
+                         [!sf: soft close programs] [!e: enable shutdown docs]
+                         [!t {OKCYAN}<seconds>{ORANGE}: shutdown in {OKCYAN}<seconds> {ORANGE}seconds]{ENDC}
                 {OKBLUE}process shutdown {ORANGE}!h{ENDC}           : Hibernate the computer (use {ORANGE}!f{ENDC} to close files).
                 Options: {ORANGE}[!f: close files] [!l: sign out]{ENDC}
                 {OKBLUE}process {ORANGE}sleep{ENDC}                 : Put the computer to sleep.
@@ -1183,7 +1176,7 @@ def __handle_prompt(prompt: str):
         case "io help":
             print(fr"""
                 -- File I/O
-                {OKBLUE}fmake {OKCYAN}<file_name> {ORANGE}[{OKCYAN}^ {WARNING}<content> [{YELLOW}| <- multiline indc.]{ORANGE}] [{OKCYAN}!append {ORANGE}or {OKCYAN}| !append{ORANGE}] [{OKCYAN}!nodef{ORANGE}]{ENDC}   : Create 
+                {OKBLUE}fmake {OKCYAN}<file_name> {ORANGE}[{OKCYAN}^ {WARNING}<content> {YELLOW}[{OKBLUE}| {YELLOW}<- multiline indc.]{ORANGE}] [{OKCYAN}!append {ORANGE}or {OKCYAN}| !append{ORANGE}] [{OKCYAN}!nodef{ORANGE}]{ENDC}   : Create 
                                                                          a file, optionally write content 
                                                                          with the {OKCYAN}^{ENDC} indicator.
                                                                          With the {OKCYAN}!append{ENDC} indicator, 
@@ -1309,12 +1302,14 @@ def __handle_prompt(prompt: str):
                 {OKBLUE}process shutdown {ORANGE}!r{ENDC}           : Restart the computer.
                 Options: {ORANGE}[!f: close files] [!fw: firmware]
                          [!o: advanced boot options] [!i: show remote shutdown]
-                         [!sf: soft close programs] [!e: enable shutdown docs]{ENDC}
+                         [!sf: soft close programs] [!e: enable shutdown docs]
+                         [!t {OKCYAN}<seconds>{ORANGE}: restart in {OKCYAN}<seconds> {ORANGE}seconds]{ENDC}
 
                 {OKBLUE}process shutdown {ORANGE}!s{ENDC}           : Shut down the computer (same options as above).
                 Options: {ORANGE}[!f: close files] [!fw: firmware]
                          [!o: advanced boot options] [!i: show remote shutdown]
-                         [!sf: soft close programs] [!e: enable shutdown docs]{ENDC}
+                         [!sf: soft close programs] [!e: enable shutdown docs]
+                         [!t {OKCYAN}<seconds>{ORANGE}: shutdown in {OKCYAN}<seconds> {ORANGE}seconds]{ENDC}
                 {OKBLUE}process shutdown {ORANGE}!h{ENDC}           : Hibernate the computer (use {ORANGE}!f{ENDC} to close files).
                 Options: {ORANGE}[!f: close files] [!l: sign out]{ENDC}
                 {OKBLUE}process {ORANGE}sleep{ENDC}                 : Put the computer to sleep.
@@ -1324,7 +1319,7 @@ def __handle_prompt(prompt: str):
                 {OKBLUE}mute volume{ENDC}                   : Mutes the volume.
 
                 -- File I/O
-                {OKBLUE}fmake {OKCYAN}<file_name> {ORANGE}[{OKCYAN}^ {WARNING}<content> [{YELLOW}| <- multiline indc.]{ORANGE}] [{OKCYAN}!append {ORANGE}or {OKCYAN}| !append{ORANGE}] [{OKCYAN}!nodef{ORANGE}]{ENDC}   : Create 
+                {OKBLUE}fmake {OKCYAN}<file_name> {ORANGE}[{OKCYAN}^ {WARNING}<content> {YELLOW}[{OKBLUE}| {YELLOW}<- multiline indc.]{ORANGE}] [{OKCYAN}!append {ORANGE}or {OKCYAN}| !append{ORANGE}] [{OKCYAN}!nodef{ORANGE}]{ENDC}   : Create 
                                                                          a file,  optionally write content 
                                                                          with the {OKCYAN}^{ENDC} indicator.
                                                                          With the {OKCYAN}!append{ENDC} indicator, 
