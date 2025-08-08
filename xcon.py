@@ -7,6 +7,7 @@ import ast # For safer eval() inputs.
 import ctypes
 import json
 import types
+import re
 MODULES = {}
 
 HEADER = '\033[95m'
@@ -36,6 +37,7 @@ LAST = None
 DECLARELIST: dict = {}
 DECLARELIST = {k: v for k, v in DECLARELIST.items() if not isinstance(v, types.ModuleType)}
 PACKAGELIST: list = []
+COMMAND_HISTORY = []
 
 def __save_vars():
     print(f"{WARNING}Attempting to save variables inside of {OKCYAN}vardecl.json{WARNING}...{ENDC}")
@@ -72,8 +74,8 @@ def __load_vars():
 def __set_volume(LEVEL):
     try:
         from ctypes import POINTER, cast
-        from comtypes import CLSCTX_ALL
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL # type: ignore
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume # type: ignore
         DEVICES = AudioUtilities.GetSpeakers()
         INTERFACE = DEVICES.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
         VOL = cast(INTERFACE, POINTER(IAudioEndpointVolume))
@@ -228,12 +230,30 @@ def __handle_prompt(prompt: str):
     global MODULES, CURRENT_DIR, RESERVED, LAST, DECLARELIST, PACKAGELIST
     prompt = prompt.strip()
     if "$" in prompt:
-        prompt = prompt.split("$", 1)[0].strip()
+        if "$$" in prompt:
+            prompt = prompt.replace("$$", "$")
+        else:
+            prompt = prompt.split("$", 1)[0].strip()
     if prompt.startswith("#") or "#" in prompt:
         print(f"{WARNING}Please use $ for comments instead.{ENDC}")
         return
     if not prompt:
         return
+    if "@" in prompt:
+        VARS = re.findall(r"@(\w+)", prompt)
+        for var in VARS:
+            try:
+                if var in DECLARELIST:
+                    VARVAL = str(DECLARELIST[var])
+                elif var in globals():
+                    VARVAL = str(globals()[var])
+                else:
+                    print(f"{WARNING}The {'variables' if len(VARS) > 1 else 'variable'} {', '.join(VARS)} could not be found associated with a value in the current context.\nDefaulting to string literal.{ENDC}")
+                    VARVAL = var
+                prompt = prompt.replace(f"@{var}", VARVAL)
+            except Exception as e:
+                print(f"{FAIL}The {'variables' if len(VARS) > 1 else 'variable'} {OKCYAN}{', '.join(VARS)} {FAIL}could not be evaluated, as {OKCYAN}{', '.join(VARS)} {FAIL}{'do' if len(VARS) > 1 else 'does'} have a value in the current context, or the {'variables' if len(VARS) > 1 else 'variable'} could not be accessed.{ENDC}")
+                return
     if prompt.startswith("chgpath "):
         path = prompt.removeprefix("chgpath ").strip()
         path = os.path.normpath(path) 
@@ -665,6 +685,18 @@ def __handle_prompt(prompt: str):
         except Exception as e:
             print(f"{FAIL}An exception occurred while attempting to mute volume. Reason:\n\n{ENDC}{e}")
             return
+    if prompt.startswith("console "):
+        CMD = prompt.removeprefix("console ").strip()
+        try:
+            print(f"{WARNING}Attempting to execute console command {OKCYAN}'{CMD}'{WARNING}...{ENDC}")
+            result = subprocess.run(CMD, shell=True, text=True, capture_output=True)
+            if result.returncode == 0:
+                print(result.stdout)
+                print(f"{OKGREEN}Successfully ran console command {OKCYAN}'{CMD}'{OKGREEN}.{ENDC}")
+            return
+        except Exception as e:
+            print(f"{FAIL}An exception occurred while attempting to execute console command {OKCYAN}'{CMD}'{FAIL}. Reason:\n\n{ENDC}{e}")
+            return
     if prompt.startswith("fmake "):
         FILE = prompt.removeprefix("fmake ").strip()
         WRITE = "^ "
@@ -916,7 +948,7 @@ def __handle_prompt(prompt: str):
                         VARVAL = DECLARELIST[VARVAL_RAW]
                     else:
                         print(f"{FAIL}Failed to initialize variable {OKCYAN}{VARNAME}{FAIL}, because it contains a invalid value: {OKCYAN}{VARVAL_RAW}{FAIL}. Error:\n\n{ENDC}{e}")
-                        result = input(f"{WARNING}Would you like to convert it to a string instead?").strip()
+                        result = input(f"{WARNING}Would you like to convert it to a string instead? {OKGREEN}[y]{COMMENT}/{FAIL}[n]{ENDC} ").strip()
                         if result == "y":
                             VARVAL = VARVAL_RAW
                         elif result == "n":
@@ -1009,8 +1041,37 @@ def __handle_prompt(prompt: str):
         if VAR in globals():
             print(globals()[VAR])
         else:
-            print(f"{WARNING}Variable '{VAR}' not found. Make sure to define your variable {VAR} before using see {VAR}.{ENDC}")
+            print(f"{WARNING}Variable {ORANGE}'{VAR}' {WARNING}not found. Make sure to define your variable {VAR} before using {OKBLUE}see {OKCYAN}{VAR}{WARNING}.{ENDC}")
         return
+    if prompt.startswith("command "):
+            global COMMAND_HISTORY
+            COMMAND_HISTORY = COMMAND_HISTORY[-100:]
+            flag = prompt.removeprefix("command ").strip()
+            if not COMMAND_HISTORY:
+                print(f"{WARNING}You haven't inputted any commands into the XCon console prompt yet, please prompt a command first before running the {OKBLUE}command history{WARNING} command.{ENDC}")
+                return
+            else:    
+                if flag == "history !r":
+                    print(f"{WARNING}Recent command history (reversed with {OKCYAN}!r{WARNING}):\n\n{ENDC}")
+                    for i, CMD in enumerate(reversed(COMMAND_HISTORY), start=1):
+                        print(f'{OKBLUE}{i}{ENDC}: {OKGREEN}{CMD}{ENDC}')
+                    return
+                elif flag == "history":
+                    print(f"{WARNING}Recent command history:\n\n{ENDC}")
+                    for i, CMD in enumerate(COMMAND_HISTORY, start=1):
+                        print(f'{OKBLUE}{i}{ENDC}: {OKGREEN}{CMD}{ENDC}')
+                    return
+                elif flag.startswith("search "):
+                    term = flag.removeprefix("search ").lower()
+                    matches = [(i+1, cmd) for i, cmd in enumerate(COMMAND_HISTORY) if term == cmd.lower()]
+                    print(f"{WARNING}Searching command in command history: {OKBLUE}{term}\n{ENDC}")
+                    if matches:
+                        for i, cmd in matches:
+                            print(f'{OKBLUE}{i}{ENDC}: {OKGREEN}{cmd}{ENDC}')
+                            return
+                    else:
+                        print(f"{WARNING}No commands matching {OKBLUE}{term} {WARNING}found.{ENDC}")
+                        return
     match prompt:
         case "info":
             print(f"{OKCYAN}XCon 2025 Ltd.\n\nUses: {YELLOW}Python\n{OKCYAN}A testing console.{ENDC}")
@@ -1039,9 +1100,9 @@ def __handle_prompt(prompt: str):
             print(f"ฅ^•ﻌ•^ฅ {PINK}meow!{ENDC}")
         case "nya":
             print(f"/ᐠ˵- ⩊ -˵マ {PINK}nya~!{ENDC}")
-        case "madi":
+        case "malak":
             print(f"""
-                  Oh, you want to know about Madi, or Madison, the creator of the console's true love?\nWell, that's pretty simple, but pretty complicated to explain at the same time, ahaha...
+                  Oh, you want to know about Malak, the creator of the console's true love?\nWell, that's pretty simple, but pretty complicated to explain at the same time, ahaha...
                   Long story short, she is the most perfect girl and the creator of the console is truly so happy\nin life with this girl. Every time he sees her in his presence, his lips don't just smile - His heart does as well.
                   His heart flutters upon her interacting with her and it feels like heaven...
                   Well, can't tell you too much here. Don't want to run low on resources here.
@@ -1054,7 +1115,7 @@ def __handle_prompt(prompt: str):
             print(fr"""
                   {OKCYAN}-- Sing along!""")
             link = subprocess.run("start https://www.youtube.com/watch?v=CAL4WMpBNs0", shell=True)
-            result = input("Press any key to start the lyrics when the song starts!\nIf you want to exit, type 'exit'.")
+            result = input(f"Press any key to start the lyrics when the song starts!\nIf you want to exit, type {ORANGE}'exit'{OKCYAN}.")
             if result == "exit":
                 return
             if link.returncode == 0:
@@ -1172,7 +1233,9 @@ def __handle_prompt(prompt: str):
                 Options: {ORANGE}[none]{ENDC}
                 -- You may need to download packages manually or with {OKBLUE}install {OKCYAN}<package>{ENDC} with the following:
                 {OKBLUE}set volume {OKCYAN}<volume_value>{ENDC}     : Sets the current volume to {OKCYAN}volume_value{ENDC}.
-                {OKBLUE}mute volume{ENDC}                   : Mutes the volume.""")
+                {OKBLUE}mute volume{ENDC}                   : Mutes the volume.
+                {OKBLUE}console {OKCYAN}<command>{ENDC}             : Runs a command directly through the console. 
+                                                {WARNING}Note: Not all commands will run as expected through XCon.{ENDC}""")
         case "io help":
             print(fr"""
                 -- File I/O
@@ -1230,7 +1293,7 @@ def __handle_prompt(prompt: str):
                                                        overwrite those.
                                                        Also, be cautious about data types. If declared a variable
                                                        'x', {OKBLUE}varmake {OKCYAN}y {YELLOW}set {OKCYAN}x{ENDC} will make y hold the value of x.
-                                                       varmake y set "x" will make y hold the *string* "x".
+                                                       {OKBLUE}varmake {OKCYAN}y {WARNING}set {ORANGE}"x"{ENDC} will make y hold the {OKBLUE}*string*{ENDC} {ORANGE}"x"{ENDC}.
                 {OKBLUE}vardel {OKCYAN}<var_name>{ENDC}             : Removes a variable from the current scope.
                 {OKBLUE}vardel {ORANGE}all{ENDC}                    : Removes all variable from the current scope.
                 {OKBLUE}save {OKCYAN}vars{ENDC}                     : Attempts to save all variables defined in the
@@ -1242,7 +1305,10 @@ def __handle_prompt(prompt: str):
                 {OKBLUE}see {OKCYAN}declared{ENDC}                  : Displays all defined variables in the current context. 
                                                 This will only display something if you have any variables declared.
                 {OKBLUE}see {OKCYAN}packages{ENDC}                  : Displays all packages manually installed with 
-                                                                      {OKBLUE}install {OKCYAN}<package_name>{ENDC}.""")
+                                                                      {OKBLUE}install {OKCYAN}<package_name>{ENDC}.
+                {HEADER}@variable{ENDC}                     : Gets evaluated as a variable. You won't need this with
+                                                commands like {OKBLUE}see {OKCYAN}<var_name>{ENDC}, but you
+                                                can use this for other commands that don't support it.""")
         case "conditions help":
             print(fr"""
                 -- Conditions
@@ -1260,7 +1326,16 @@ def __handle_prompt(prompt: str):
                 {OKBLUE}echo {OKCYAN}<text>{ENDC}                   : Prints out text to the stream. 
                                                 For variables, you might just want to use {OKBLUE}see {OKCYAN}<var_name>{ENDC},
                                                 but {OKBLUE}echo {OKCYAN}<var_name>{ENDC} is possible as well.
-                {COMMENT}$ some text here{ENDC}              : Makes a comment. Comments are ignored in code and input.
+                {OKBLUE}command {OKCYAN}history {ORANGE}[{OKCYAN}!r{ORANGE}]{ENDC}          : Shows the command history in the current context.
+                                                The {OKCYAN}!r{ENDC} indicator at the end reverses the command
+                                                history, showing the oldest commands first, building
+                                                up to the most recent commands.
+                {OKBLUE}command {OKCYAN}search {WARNING}<command_name>{ENDC} : Searches for appearances of the command {OKCYAN}<command_name> {ENDC}in the 
+                                                current context.
+                {COMMENT}$ Some comment here{ENDC}           : Makes a comment. Comments are ignored in code and input.
+                                                In order to escape comments and make a genuine dollar sign ($),
+                                                you'll need to use the escape sequence instead of a single $,
+                                                {OKBLUE}$${ENDC}.
                 {OKBLUE}info{ENDC}                          : Show console information.
                 {OKBLUE}version{ENDC}                       : Show the current version.
                 {OKBLUE}wipe{ENDC}                          : Clears everything off the console screen.
@@ -1317,6 +1392,8 @@ def __handle_prompt(prompt: str):
                 -- You may need to download packages manually or with {OKBLUE}install {OKCYAN}<package>{ENDC} with the following:
                 {OKBLUE}set volume {OKCYAN}<volume_value>{ENDC}     : Sets the current volume to {OKCYAN}volume_value{ENDC}.
                 {OKBLUE}mute volume{ENDC}                   : Mutes the volume.
+                {OKBLUE}console {OKCYAN}<command>{ENDC}             : Runs a command directly through the console. 
+                                                {WARNING}Note: Not all commands will run as expected through XCon.{ENDC}
 
                 -- File I/O
                 {OKBLUE}fmake {OKCYAN}<file_name> {ORANGE}[{OKCYAN}^ {WARNING}<content> {YELLOW}[{OKBLUE}| {YELLOW}<- multiline indc.]{ORANGE}] [{OKCYAN}!append {ORANGE}or {OKCYAN}| !append{ORANGE}] [{OKCYAN}!nodef{ORANGE}]{ENDC}   : Create 
@@ -1371,8 +1448,8 @@ def __handle_prompt(prompt: str):
                                                        XCon Console commands are an exception, you cannot 
                                                        overwrite those.
                                                        Also, be cautious about data types. If declared a variable
-                                                       'x', {OKBLUE}varmake {OKCYAN}y {YELLOW}set {OKCYAN}x{ENDC} will make y hold the value of x.
-                                                       varmake y set "x" will make y hold the *string* "x".
+                                                       'x', {OKBLUE}varmake {OKCYAN}y {WARNING}set {OKCYAN}x{ENDC} will make y hold the value of x.
+                                                       {OKBLUE}varmake {OKCYAN}y {WARNING}set {ORANGE}"x"{ENDC} will make y hold the {OKBLUE}*string*{ENDC} {ORANGE}"x"{ENDC}.
                 {OKBLUE}vardel {OKCYAN}<var_name>{ENDC}             : Removes a variable from the current scope.
                 {OKBLUE}load {OKCYAN}vars{ENDC}                     : Attempts to load all variables saved in the
                                                                       current context.
@@ -1381,6 +1458,9 @@ def __handle_prompt(prompt: str):
                 {OKBLUE}see {OKCYAN}globals{ENDC}                   : Display all the global values in the current context.
                 {OKBLUE}see {OKCYAN}declared{ENDC}                  : Displays all defined variables in the current context. 
                                                 This will only display something if you have any variables declared.
+                {HEADER}@variable{ENDC}                     : Gets evaluated as a variable. You won't need this with
+                                                commands like {OKBLUE}see {OKCYAN}<var_name>{ENDC}, but you
+                                                can use this for other commands that don't support it.
                 -- Conditions
                 {OKBLUE}check {OKCYAN}<condition>{ENDC}             : Checks if a certain condition is true or not.
                 {OKBLUE}check {OKCYAN}<any>{ENDC}                   : This can be anything, for example, this can check the
@@ -1395,7 +1475,16 @@ def __handle_prompt(prompt: str):
                 {OKBLUE}echo {OKCYAN}<text>{ENDC}                   : Prints out text to the stream. 
                                                 For variables, you might just want to use {OKBLUE}see {OKCYAN}<var_name>{ENDC},
                                                 but {OKBLUE}echo {OKCYAN}<var_name>{ENDC} is possible as well.
-                {COMMENT}$ some comment here{ENDC}           : Makes a comment. Comments are ignored in code and input.
+                {OKBLUE}command {OKCYAN}history {ORANGE}[{OKCYAN}!r{ORANGE}]{ENDC}          : Shows the command history in the current context.
+                                                The {OKCYAN}!r{ENDC} indicator at the end reverses the command
+                                                history, showing the oldest commands first, building
+                                                up to the most recent commands.
+                {OKBLUE}command {OKCYAN}search {WARNING}<command_name>{ENDC} : Searches for appearances of the command {OKCYAN}<command_name> {ENDC}in the 
+                                                current context.
+                {COMMENT}$ Some comment here{ENDC}           : Makes a comment. Comments are ignored in code and input.
+                                                In order to escape comments and make a genuine dollar sign ($),
+                                                you'll need to use the escape sequence instead of a single $,
+                                                {OKBLUE}$${ENDC}.
                 {OKBLUE}info{ENDC}                          : Show console information.
                 {OKBLUE}version{ENDC}                       : Show the current version.
                 {OKBLUE}wipe{ENDC}                          : Clears everything off the console screen.
@@ -1440,9 +1529,12 @@ def __console():
     __load_vars()
     print(f"{OKCYAN}>>>>> {HEADER}XCon Console Ltd. 2025\nUse for educational purposes.")
     while True:
-        try:   
+        try:
             PROMPT = input(f"{ENDC}{os.getcwd()} >{OKBLUE} ").strip()
-            __handle_prompt(PROMPT)
+            if PROMPT:
+                if not PROMPT.startswith("command history"):
+                    COMMAND_HISTORY.append(PROMPT)
+                __handle_prompt(PROMPT)
         except Exception as e:
             print(f"{FAIL}Preventing shutdown by error:\n\n{ENDC}{e}")
             
